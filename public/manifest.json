@@ -1,17 +1,38 @@
 {
+  "name": "SmartCart - AI Shopping Assistant",
   "short_name": "SmartCart",
-  "name": "SmartCart - Smart Grocery Assistant",
-  "icons": [
-    {
-      "src": "/favicon.svg",
-      "type": "image/svg+xml",
-      "sizes": "512x512 192x192 any",
-      "purpose": "any maskable"
-    }
-  ],
+  "description": "AI Camera-First Smart Grocery & Supercenter Assistant. Scan items, track budget, smart swaps, and voice assistant.",
   "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#000000",
   "theme_color": "#000000",
-  "display": "standalone",
-  "orientation": "portrait"
+  "categories": ["shopping", "utilities", "lifestyle"],
+  "icons": [
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
 }

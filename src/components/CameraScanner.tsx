@@ -31,9 +31,9 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const activeStreamRef = useRef<MediaStream | null>(null);
 
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const [isVideoReady, setIsVideoReady] = useState<boolean>(false);
+  const [hasCameraStream, setHasCameraStream] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [torchOn, setTorchOn] = useState<boolean>(false);
@@ -41,176 +41,128 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [lastDetectedId, setLastDetectedId] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [scanStatusMessage, setScanStatusMessage] = useState<string>('Align Item');
-  const [isRequesting, setIsRequesting] = useState<boolean>(false);
+  const [isStarting, setIsStarting] = useState<boolean>(false);
 
   // Helper to stop all tracks
-  const stopTracks = useCallback((s: MediaStream | null) => {
-    if (s) {
-      s.getTracks().forEach(track => {
+  const stopCurrentStream = useCallback(() => {
+    if (activeStreamRef.current) {
+      activeStreamRef.current.getTracks().forEach((track) => {
         try {
           track.stop();
         } catch {
           // ignore
         }
       });
+      activeStreamRef.current = null;
     }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setHasCameraStream(false);
+    setTorchOn(false);
   }, []);
 
-  // Multi-tier camera launcher supporting iOS Safari & all mobile browsers
-  const startCamera = useCallback(async () => {
+  // Bulletproof camera startup
+  const startCamera = useCallback(async (targetFacingMode: 'environment' | 'user' = facingMode) => {
+    const video = videoRef.current;
+    if (!video) return;
+
     try {
-      setIsRequesting(true);
+      setIsStarting(true);
       setCameraError(null);
 
       // Check HTTPS secure context on mobile devices
       if (typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        setCameraError('On iPhone, camera access requires HTTPS. Please ensure your site URL starts with https://');
-        setIsRequesting(false);
+        setCameraError('Camera access requires HTTPS. Please open using https://');
+        setIsStarting(false);
         return;
       }
 
       if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setCameraError('Camera API is not supported in this browser. Please open in Safari or Chrome, or use the Mart Shelf below.');
-        setIsRequesting(false);
+        setCameraError('Camera API is not supported in this browser. Please open in Chrome or Safari.');
+        setIsStarting(false);
         return;
       }
 
-      // Stop old tracks before requesting new stream
-      if (stream) {
-        stopTracks(stream);
-        setStream(null);
-      }
+      // Stop any existing stream first
+      stopCurrentStream();
 
-      // Tiered constraints: try ideal resolution, then relaxed, then bare minimum
-      const constraintTiers: MediaStreamConstraints[] = [
-        {
-          video: {
-            facingMode: { ideal: facingMode },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-          audio: false,
-        },
-        {
-          video: {
-            facingMode: { ideal: facingMode },
-          },
-          audio: false,
-        },
-        {
-          video: {
-            facingMode: facingMode,
-          },
-          audio: false,
-        },
-        {
-          video: true,
-          audio: false,
-        }
-      ];
-
+      // Tiered constraints: try ideal facingMode, fallback to generic video
       let mediaStream: MediaStream | null = null;
       let lastErr: unknown = null;
 
-      for (const constraints of constraintTiers) {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: targetFacingMode } },
+          audio: false,
+        });
+      } catch (err1) {
+        console.warn('Ideal facingMode failed, falling back to any video device:', err1);
         try {
-          mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-          if (mediaStream) break;
-        } catch (e) {
-          lastErr = e;
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        } catch (err2) {
+          lastErr = err2;
         }
       }
 
       if (!mediaStream) {
-        throw lastErr || new Error('Unable to access camera with any constraints');
+        throw lastErr || new Error('Could not acquire video feed');
       }
 
-      setStream(mediaStream);
+      // DIRECT SYNCHRONOUS BINDING TO VIDEO ELEMENT
+      activeStreamRef.current = mediaStream;
+      video.srcObject = mediaStream;
+      video.muted = true;
+      video.defaultMuted = true;
+      video.setAttribute('playsinline', 'true');
+      video.setAttribute('webkit-playsinline', 'true');
+
+      try {
+        await video.play();
+      } catch (playErr) {
+        console.warn('video.play() deferred:', playErr);
+      }
+
+      setHasCameraStream(true);
       setCameraError(null);
     } catch (err: unknown) {
-      console.warn('Camera startup error:', err);
+      console.error('Camera startup error:', err);
       const errName = (err as Error)?.name || '';
       const errMsg = (err as Error)?.message || '';
 
       if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
         setCameraError(
-          'Camera access was denied. In Safari on iPhone: Tap "aA" (or the lock/settings icon) in the address bar → Website Settings → Camera → Allow, then tap Retry below.'
+          'Camera permission denied. On iPhone Safari: tap "aA" in the address bar → Website Settings → Camera → Allow, then tap Retry Camera.'
         );
       } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
-        setCameraError('No camera was found on this device. You can test products using the Mart Shelf below.');
+        setCameraError('No camera found on this device. You can test products using the Mart Shelf below.');
       } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
-        setCameraError('Camera is currently in use by another app or browser tab. Please close other camera apps and retry.');
+        setCameraError('Camera is already in use by another app or browser tab. Please close other camera tabs and retry.');
       } else {
-        setCameraError(`Camera error (${errName || errMsg || 'unknown'}). Tap Retry Camera below.`);
+        setCameraError(`Camera error: ${errMsg || errName || 'Could not start'}. Tap Retry Camera.`);
       }
-      setIsVideoReady(false);
+      setHasCameraStream(false);
     } finally {
-      setIsRequesting(false);
+      setIsStarting(false);
     }
-  }, [facingMode, stopTracks, stream]);
-
-  // Dedicated Effect: Bind stream to <video> and ensure playback on iOS Safari
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (!stream) {
-      video.srcObject = null;
-      setIsVideoReady(false);
-      return;
-    }
-
-    video.srcObject = stream;
-    video.setAttribute('playsinline', 'true');
-    video.setAttribute('webkit-playsinline', 'true');
-    video.muted = true;
-
-    let isSubscribed = true;
-
-    const handleReady = () => {
-      if (isSubscribed) {
-        setIsVideoReady(true);
-        setCameraError(null);
-      }
-    };
-
-    video.onloadedmetadata = () => {
-      video.play().then(handleReady).catch((err) => {
-        console.warn('Playback waiting for interaction:', err);
-      });
-    };
-
-    video.onplaying = handleReady;
-
-    // Direct play trigger
-    video.play().then(handleReady).catch(() => {
-      // Browsers may require user tap
-    });
-
-    return () => {
-      isSubscribed = false;
-      video.onloadedmetadata = null;
-      video.onplaying = null;
-    };
-  }, [stream]);
+  }, [facingMode, stopCurrentStream]);
 
   // Initialize camera when active tab
   useEffect(() => {
-    if (isActive && !stream && !cameraError) {
+    if (isActive && !activeStreamRef.current) {
       startCamera();
     }
-  }, [isActive, stream, cameraError, startCamera]);
-
-  // Clean up on component unmount
-  useEffect(() => {
     return () => {
-      stopTracks(stream);
+      stopCurrentStream();
     };
-  }, [stopTracks, stream]);
+  }, [isActive, startCamera, stopCurrentStream]);
 
-  // Live video detection loop for barcodes (only when tab is active and video is playing)
+  // Live video detection loop for barcodes (only when tab is active and camera is streaming)
   useEffect(() => {
-    if (!isActive || !isVideoReady) return;
+    if (!isActive || !hasCameraStream) return;
 
     const interval = setInterval(async () => {
       if (!videoRef.current || videoRef.current.readyState < 2 || isAnalyzing) return;
@@ -225,12 +177,12 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     }, 600);
 
     return () => clearInterval(interval);
-  }, [isActive, isVideoReady, isAnalyzing, lastDetectedId, onProductDetected]);
+  }, [isActive, hasCameraStream, isAnalyzing, lastDetectedId, onProductDetected]);
 
   // Toggle flashlight (torch)
   const toggleTorch = async () => {
-    if (!stream) return;
-    const track = stream.getVideoTracks()[0];
+    if (!activeStreamRef.current) return;
+    const track = activeStreamRef.current.getVideoTracks()[0];
     if (track && 'applyConstraints' in track) {
       try {
         await (track as unknown as { applyConstraints: (c: unknown) => Promise<void> }).applyConstraints({
@@ -245,7 +197,9 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
   // Flip camera front / back
   const flipCamera = () => {
-    setFacingMode(prev => prev === 'environment' ? 'user' : 'environment');
+    const nextMode = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextMode);
+    startCamera(nextMode);
   };
 
   // Trigger snapshot AI capture via Gemini Vision
@@ -310,48 +264,46 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   return (
     <div className="relative w-full h-full flex flex-col bg-black overflow-hidden select-none">
       
-      {/* Viewfinder Background */}
+      {/* Viewfinder Area */}
       <div className="relative flex-1 w-full bg-zinc-950 overflow-hidden flex items-center justify-center">
         
-        {/* Video element is ALWAYS mounted to preserve DOM reference */}
+        {/* Always-mounted Video element for camera stream */}
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
-          className={`w-full h-full object-cover transition-opacity duration-300 ${
-            isVideoReady ? 'opacity-100' : 'opacity-0 pointer-events-none'
-          }`}
+          className="w-full h-full object-cover"
         />
 
-        {/* Fallback View / Permission Request Screen (shown when video is not actively streaming) */}
-        {!isVideoReady && (
-          <div className="absolute inset-0 z-0 flex flex-col items-center justify-center bg-gradient-to-b from-zinc-900 via-black to-zinc-900 px-6 text-center">
-            <div className="w-20 h-20 rounded-full bg-zinc-800/80 border border-white/10 flex items-center justify-center mb-4 shadow-inner">
-              {isRequesting ? (
+        {/* Fallback & Permission Modal (Only shown if camera stream is NOT active or has error) */}
+        {(!hasCameraStream || cameraError) && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md px-6 text-center animate-fade-in">
+            <div className="w-20 h-20 rounded-full bg-zinc-800/90 border border-white/10 flex items-center justify-center mb-4 shadow-2xl">
+              {isStarting ? (
                 <RefreshCw className="w-9 h-9 text-ios-blue animate-spin" />
               ) : cameraError ? (
-                <AlertCircle className="w-9 h-9 text-ios-orange" />
+                <AlertCircle className="w-9 h-9 text-ios-orange animate-bounce" />
               ) : (
                 <Camera className="w-9 h-9 text-ios-green animate-pulse" />
               )}
             </div>
 
             <h3 className="text-base font-bold text-white mb-1.5">
-              {isRequesting ? 'Starting Camera...' : cameraError ? 'Camera Permission' : 'Live Camera Scanner'}
+              {isStarting ? 'Starting Camera...' : cameraError ? 'Camera Permission Needed' : 'Camera Scanner'}
             </h3>
 
             <p className="text-xs text-zinc-300 max-w-xs mb-5 leading-relaxed">
-              {cameraError || 'Allow camera access to scan Walmart, Target, supermarket products and barcodes directly with AI.'}
+              {cameraError || 'Tap below to enable your camera to scan Walmart, Target, supermarket products and barcodes.'}
             </p>
 
             <div className="flex flex-col space-y-2.5 w-full max-w-xs">
               <button
-                onClick={startCamera}
-                disabled={isRequesting}
+                onClick={() => startCamera()}
+                disabled={isStarting}
                 className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-ios-green to-ios-blue text-white font-semibold text-xs flex items-center justify-center space-x-2 shadow-lg active:scale-95 transition-all disabled:opacity-50"
               >
-                <RefreshCw className={`w-4 h-4 ${isRequesting ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-4 h-4 ${isStarting ? 'animate-spin' : ''}`} />
                 <span>{cameraError ? 'Retry Camera Access' : 'Tap to Enable Camera'}</span>
               </button>
 
@@ -374,50 +326,52 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           <div className="px-3 py-1 rounded-full bg-black/70 backdrop-blur-md border border-white/15 flex items-center space-x-1.5 text-[11px] font-semibold text-zinc-200 shadow-lg">
             <Sparkles className="w-3.5 h-3.5 text-ios-purple animate-pulse" />
             <span>Universal AI Mart Scanner</span>
-            <span className={`w-1.5 h-1.5 rounded-full ${isVideoReady ? 'bg-ios-green' : 'bg-ios-orange animate-ping'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${hasCameraStream ? 'bg-ios-green' : 'bg-ios-orange animate-ping'}`} />
           </div>
         </div>
 
-        {/* Scanning Reticle HUD Overlay (Always visible or when video is ready) */}
-        <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center px-8">
-          
-          {/* Target Box with Glowing Corners */}
-          <div className="relative w-72 h-72 max-w-[85vw] max-h-[44vh] rounded-3xl flex items-center justify-center">
+        {/* Scanning Reticle HUD Overlay */}
+        {hasCameraStream && (
+          <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center px-8 z-10">
             
-            {/* 4 Corner Markers */}
-            <div className={`absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 rounded-tl-2xl transition-colors duration-300 ${
-              isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
-            }`} />
-            <div className={`absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 rounded-tr-2xl transition-colors duration-300 ${
-              isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
-            }`} />
-            <div className={`absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 rounded-bl-2xl transition-colors duration-300 ${
-              isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
-            }`} />
-            <div className={`absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 rounded-br-2xl transition-colors duration-300 ${
-              isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
-            }`} />
+            {/* Target Box with Glowing Corners */}
+            <div className="relative w-72 h-72 max-w-[85vw] max-h-[44vh] rounded-3xl flex items-center justify-center">
+              
+              {/* 4 Corner Markers */}
+              <div className={`absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 rounded-tl-2xl transition-colors duration-300 ${
+                isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
+              }`} />
+              <div className={`absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 rounded-tr-2xl transition-colors duration-300 ${
+                isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
+              }`} />
+              <div className={`absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 rounded-bl-2xl transition-colors duration-300 ${
+                isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
+              }`} />
+              <div className={`absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 rounded-br-2xl transition-colors duration-300 ${
+                isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
+              }`} />
 
-            {/* Sweeping Laser Line */}
-            <div className={`absolute left-3 right-3 h-0.5 rounded-full ${
-              isAnalyzing 
-                ? 'bg-gradient-to-r from-transparent via-ios-purple to-transparent animate-pulse h-1' 
-                : 'bg-gradient-to-r from-transparent via-ios-green to-transparent scanner-laser'
-            }`} />
+              {/* Sweeping Laser Line */}
+              <div className={`absolute left-3 right-3 h-0.5 rounded-full ${
+                isAnalyzing 
+                  ? 'bg-gradient-to-r from-transparent via-ios-purple to-transparent animate-pulse h-1' 
+                  : 'bg-gradient-to-r from-transparent via-ios-green to-transparent scanner-laser'
+              }`} />
 
-            {/* Central Targeting Dot */}
-            <div className="w-3 h-3 rounded-full bg-ios-green/40 border border-ios-green flex items-center justify-center">
-              <div className="w-1 h-1 rounded-full bg-white" />
+              {/* Central Targeting Dot */}
+              <div className="w-3 h-3 rounded-full bg-ios-green/40 border border-ios-green flex items-center justify-center">
+                <div className="w-1 h-1 rounded-full bg-white" />
+              </div>
+
+              {/* Floating Status Pill */}
+              <div className="absolute -bottom-10 bg-black/75 backdrop-blur-md px-3.5 py-1.5 rounded-full border border-white/10 text-xs font-medium text-zinc-200 flex items-center space-x-2 shadow-xl">
+                <div className={`w-2 h-2 rounded-full ${isAnalyzing ? 'bg-ios-purple animate-ping' : 'bg-ios-green animate-pulse'}`} />
+                <span>{scanStatusMessage}</span>
+              </div>
             </div>
 
-            {/* Floating Status Pill: "Align Item" */}
-            <div className="absolute -bottom-10 bg-black/75 backdrop-blur-md px-3.5 py-1.5 rounded-full border border-white/10 text-xs font-medium text-zinc-200 flex items-center space-x-2 shadow-xl">
-              <div className={`w-2 h-2 rounded-full ${isAnalyzing ? 'bg-ios-purple animate-ping' : isVideoReady ? 'bg-ios-green animate-pulse' : 'bg-ios-yellow'}`} />
-              <span>{scanStatusMessage}</span>
-            </div>
           </div>
-
-        </div>
+        )}
 
         {/* Top Floating Action Controls (Torch, Flip Camera, Sample Shelf) */}
         <div className="absolute top-3 left-4 right-4 flex justify-between items-center pointer-events-auto z-10">

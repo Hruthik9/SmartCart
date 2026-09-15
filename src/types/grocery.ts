@@ -41,6 +41,7 @@ export interface Product {
   specs?: Record<string, string>;
   storeAvailability?: string[];
   description: string;
+  snapshotUrl?: string; // Captured live camera photo
   healthierAlternativeId?: string;
   cheaperAlternativeId?: string;
   healthExplanation?: string;
@@ -53,6 +54,7 @@ export interface CartItem {
   addedVia: 'camera' | 'voice' | 'manual' | 'swap';
   timestamp: number;
   checked: boolean;
+  snapshotUrl?: string; // Stored photo captured from camera scanner
 }
 
 export interface SwapRecommendation {

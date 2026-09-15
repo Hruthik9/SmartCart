@@ -16,8 +16,10 @@ export const ProductCardModal: React.FC<ProductCardModalProps> = ({
   onViewAlternative,
 }) => {
   const [quantity, setQuantity] = useState(1);
+  const [showSnapshotView, setShowSnapshotView] = useState<boolean>(!!product.snapshotUrl);
 
   const isFood = product.isFood !== false && !!product.nutrition && !!product.nutriScore;
+  const currentDisplayImage = showSnapshotView && product.snapshotUrl ? product.snapshotUrl : product.image;
 
   const getNutriColor = (score?: NutriScore) => {
     switch (score) {
@@ -68,11 +70,11 @@ export const ProductCardModal: React.FC<ProductCardModalProps> = ({
           
           {/* Main Visual & Score/Retail Badge */}
           <div className="flex space-x-4 items-start bg-zinc-900/60 p-3 rounded-2xl border border-white/5">
-            <div className="relative w-24 h-24 rounded-xl overflow-hidden bg-zinc-800 flex-shrink-0 border border-white/10">
+            <div className="relative w-24 h-24 rounded-xl overflow-hidden bg-zinc-800 flex-shrink-0 border border-white/10 group">
               <img 
-                src={product.image} 
+                src={currentDisplayImage} 
                 alt={product.name} 
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover transition-all"
               />
               <div className="absolute top-1 left-1">
                 {isFood && product.nutriScore ? (
@@ -85,6 +87,15 @@ export const ProductCardModal: React.FC<ProductCardModalProps> = ({
                   </span>
                 )}
               </div>
+
+              {product.snapshotUrl && (
+                <button
+                  onClick={() => setShowSnapshotView(!showSnapshotView)}
+                  className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-xs text-[9px] font-semibold text-zinc-200 border border-white/20 hover:text-white"
+                >
+                  {showSnapshotView ? 'Snap 📸' : 'Art 🖼️'}
+                </button>
+              )}
             </div>
 
             <div className="flex-1 min-w-0">
@@ -100,6 +111,29 @@ export const ProductCardModal: React.FC<ProductCardModalProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Captured Camera Snapshot Session Card */}
+          {product.snapshotUrl && (
+            <div className="flex items-center space-x-3 p-2.5 rounded-2xl bg-zinc-900/90 border border-ios-blue/30 shadow-md">
+              <div className="relative w-12 h-12 rounded-xl overflow-hidden border border-white/20 flex-shrink-0">
+                <img 
+                  src={product.snapshotUrl} 
+                  alt="Captured camera snapshot" 
+                  className="w-full h-full object-cover cursor-pointer"
+                  onClick={() => setShowSnapshotView(true)}
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center space-x-1.5">
+                  <span className="w-2 h-2 rounded-full bg-ios-green animate-pulse" />
+                  <p className="text-xs font-bold text-white">Live Camera Snapshot Captured</p>
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  Saved to this session and marked as scanned in your cart.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Store Availability Tag */}
           {product.storeAvailability && product.storeAvailability.length > 0 && (

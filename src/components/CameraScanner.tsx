@@ -40,8 +40,12 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [isSimulatedShelfOpen, setIsSimulatedShelfOpen] = useState<boolean>(false);
   const [lastDetectedId, setLastDetectedId] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
-  const [scanStatusMessage, setScanStatusMessage] = useState<string>('Align Item');
+  const [scanStatusMessage, setScanStatusMessage] = useState<string>('Ready to Scan');
   const [isStarting, setIsStarting] = useState<boolean>(false);
+
+  // Snapshot flash effect & latest captured photo state
+  const [isFlashing, setIsFlashing] = useState<boolean>(false);
+  const [latestSnapshotUrl, setLatestSnapshotUrl] = useState<string | null>(null);
 
   // Helper to stop all tracks
   const stopCurrentStream = useCallback(() => {
@@ -171,7 +175,25 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       if (detected && detected.id !== lastDetectedId) {
         setLastDetectedId(detected.id);
         soundEffects.playScanBeep();
-        onProductDetected(detected);
+
+        // Also capture a clean snapshot of the detected barcode item
+        let capturedSnapshotUrl: string | undefined = undefined;
+        if (canvasRef.current && videoRef.current.videoWidth > 0) {
+          const canvas = canvasRef.current;
+          canvas.width = videoRef.current.videoWidth;
+          canvas.height = videoRef.current.videoHeight;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+            capturedSnapshotUrl = canvas.toDataURL('image/jpeg', 0.85);
+            setLatestSnapshotUrl(capturedSnapshotUrl);
+          }
+        }
+
+        onProductDetected({
+          ...detected,
+          snapshotUrl: capturedSnapshotUrl || detected.snapshotUrl,
+        });
         setTimeout(() => setLastDetectedId(null), 3000);
       }
     }, 600);
@@ -202,34 +224,46 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     startCamera(nextMode);
   };
 
-  // Trigger snapshot AI capture via Gemini Vision
+  // Trigger snapshot AI capture via Gemini Vision & camera frame
   const handleCaptureSnapshot = async () => {
     if (isAnalyzing) return;
     setIsAnalyzing(true);
-    setScanStatusMessage('Gemini AI Analyzing Item...');
+    setScanStatusMessage('Capturing & Analyzing...');
+
+    // Trigger instant camera shutter sound and white flash animation
+    soundEffects.playCameraShutter();
+    setIsFlashing(true);
+    setTimeout(() => setIsFlashing(false), 180);
 
     try {
       let recognized: Product | null = null;
+      let snapshotDataUrl: string | undefined = undefined;
 
-      if (videoRef.current && canvasRef.current && videoRef.current.readyState >= 2) {
+      if (videoRef.current && canvasRef.current && videoRef.current.videoWidth > 0) {
         const video = videoRef.current;
         const canvas = canvasRef.current;
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          snapshotDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          setLatestSnapshotUrl(snapshotDataUrl);
           recognized = await visionService.identifyFromSnapshot(canvas);
         }
       } else {
-        // If camera stream is unavailable, pick from catalog
+        // Fallback for simulation
         recognized = GROCERY_CATALOG[0];
       }
 
       if (recognized) {
         soundEffects.playScanBeep();
+        const productWithSnapshot: Product = {
+          ...recognized,
+          snapshotUrl: snapshotDataUrl || recognized.snapshotUrl,
+        };
         setScanStatusMessage(`Identified: ${recognized.name}`);
-        onProductDetected(recognized);
+        onProductDetected(productWithSnapshot);
       } else {
         setScanStatusMessage('Could not identify item. Try again.');
       }
@@ -238,7 +272,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       setScanStatusMessage('Scan error. Try again.');
     } finally {
       setIsAnalyzing(false);
-      setTimeout(() => setScanStatusMessage('Align Item'), 3500);
+      setTimeout(() => setScanStatusMessage('Ready to Scan'), 3500);
     }
   };
 
@@ -264,6 +298,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   return (
     <div className="relative w-full h-full flex flex-col bg-black overflow-hidden select-none">
       
+      {/* Shutter White Flash Animation on Snapshot */}
+      {isFlashing && (
+        <div className="absolute inset-0 z-50 bg-white/95 pointer-events-none transition-opacity duration-150 animate-fade-out" />
+      )}
+
       {/* Viewfinder Area */}
       <div className="relative flex-1 w-full bg-zinc-950 overflow-hidden flex items-center justify-center">
         
@@ -285,7 +324,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               ) : cameraError ? (
                 <AlertCircle className="w-9 h-9 text-ios-orange animate-bounce" />
               ) : (
-                <Camera className="w-9 h-9 text-ios-green animate-pulse" />
+                <Camera className="w-9 h-9 text-white/80 animate-pulse" />
               )}
             </div>
 
@@ -301,7 +340,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               <button
                 onClick={() => startCamera()}
                 disabled={isStarting}
-                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-ios-green to-ios-blue text-white font-semibold text-xs flex items-center justify-center space-x-2 shadow-lg active:scale-95 transition-all disabled:opacity-50"
+                className="w-full py-3 px-4 rounded-xl bg-white text-black font-semibold text-xs flex items-center justify-center space-x-2 shadow-lg active:scale-95 transition-all disabled:opacity-50"
               >
                 <RefreshCw className={`w-4 h-4 ${isStarting ? 'animate-spin' : ''}`} />
                 <span>{cameraError ? 'Retry Camera Access' : 'Tap to Enable Camera'}</span>
@@ -311,7 +350,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                 onClick={() => setIsSimulatedShelfOpen(true)}
                 className="w-full py-2.5 px-4 rounded-xl bg-zinc-800/90 border border-white/10 text-zinc-200 font-semibold text-xs flex items-center justify-center space-x-1.5 hover:bg-zinc-700 active:scale-95 transition-all"
               >
-                <Layers className="w-4 h-4 text-ios-green" />
+                <Layers className="w-4 h-4 text-ios-blue" />
                 <span>Open Mart Shelf (Quick-Scan Items)</span>
               </button>
             </div>
@@ -321,51 +360,41 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         {/* Hidden Canvas for Frame Processing */}
         <canvas ref={canvasRef} className="hidden" />
 
-        {/* Top AI Engine Indicator Badge */}
-        <div className="absolute top-14 left-0 right-0 flex justify-center pointer-events-none z-10">
-          <div className="px-3 py-1 rounded-full bg-black/70 backdrop-blur-md border border-white/15 flex items-center space-x-1.5 text-[11px] font-semibold text-zinc-200 shadow-lg">
-            <Sparkles className="w-3.5 h-3.5 text-ios-purple animate-pulse" />
-            <span>Universal AI Mart Scanner</span>
+        {/* Top Minimal Status Indicator Pill */}
+        <div className="absolute top-12 left-0 right-0 flex justify-center pointer-events-none z-20">
+          <div className="px-3.5 py-1 rounded-full bg-black/60 backdrop-blur-md border border-white/15 flex items-center space-x-2 text-[11px] font-semibold text-zinc-200 shadow-xl">
+            <Sparkles className="w-3.5 h-3.5 text-ios-blue animate-pulse" />
+            <span>AI Supercenter Vision</span>
             <span className={`w-1.5 h-1.5 rounded-full ${hasCameraStream ? 'bg-ios-green' : 'bg-ios-orange animate-ping'}`} />
           </div>
         </div>
 
-        {/* Scanning Reticle HUD Overlay */}
+        {/* Clean, Refined Apple Viewfinder HUD (Replaces loud green bars & laser) */}
         {hasCameraStream && (
-          <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center px-8 z-10">
+          <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center z-10">
             
-            {/* Target Box with Glowing Corners */}
-            <div className="relative w-72 h-72 max-w-[85vw] max-h-[44vh] rounded-3xl flex items-center justify-center">
+            {/* Viewfinder Target Window */}
+            <div className="relative w-72 h-72 max-w-[78vw] max-h-[42vh] rounded-[32px] flex items-center justify-center">
               
-              {/* 4 Corner Markers */}
-              <div className={`absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 rounded-tl-2xl transition-colors duration-300 ${
-                isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
-              }`} />
-              <div className={`absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 rounded-tr-2xl transition-colors duration-300 ${
-                isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
-              }`} />
-              <div className={`absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 rounded-bl-2xl transition-colors duration-300 ${
-                isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
-              }`} />
-              <div className={`absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 rounded-br-2xl transition-colors duration-300 ${
-                isAnalyzing ? 'border-ios-purple shadow-[0_0_16px_rgba(191,90,242,0.9)]' : 'border-ios-green shadow-[0_0_12px_rgba(48,209,88,0.8)]'
-              }`} />
+              {/* Soft dark vignette outside the active scanning zone */}
+              <div className="absolute -inset-1 rounded-[36px] border border-white/20 shadow-[0_0_0_9999px_rgba(0,0,0,0.30)] transition-all duration-300" />
 
-              {/* Sweeping Laser Line */}
-              <div className={`absolute left-3 right-3 h-0.5 rounded-full ${
-                isAnalyzing 
-                  ? 'bg-gradient-to-r from-transparent via-ios-purple to-transparent animate-pulse h-1' 
-                  : 'bg-gradient-to-r from-transparent via-ios-green to-transparent scanner-laser'
-              }`} />
+              {/* 4 Minimalist Refined White Corner Ticks */}
+              <div className="absolute top-2 left-2 w-5 h-5 border-t-2 border-l-2 border-white/90 rounded-tl-xl" />
+              <div className="absolute top-2 right-2 w-5 h-5 border-t-2 border-r-2 border-white/90 rounded-tr-xl" />
+              <div className="absolute bottom-2 left-2 w-5 h-5 border-b-2 border-l-2 border-white/90 rounded-bl-xl" />
+              <div className="absolute bottom-2 right-2 w-5 h-5 border-b-2 border-r-2 border-white/90 rounded-br-xl" />
 
-              {/* Central Targeting Dot */}
-              <div className="w-3 h-3 rounded-full bg-ios-green/40 border border-ios-green flex items-center justify-center">
-                <div className="w-1 h-1 rounded-full bg-white" />
-              </div>
+              {/* Soft, gentle center focus indicator (clean dot instead of noisy neon laser) */}
+              {isAnalyzing ? (
+                <div className="w-10 h-10 rounded-full border border-ios-blue/80 animate-ping opacity-60" />
+              ) : (
+                <div className="w-1.5 h-1.5 rounded-full bg-white/50" />
+              )}
 
               {/* Floating Status Pill */}
-              <div className="absolute -bottom-10 bg-black/75 backdrop-blur-md px-3.5 py-1.5 rounded-full border border-white/10 text-xs font-medium text-zinc-200 flex items-center space-x-2 shadow-xl">
-                <div className={`w-2 h-2 rounded-full ${isAnalyzing ? 'bg-ios-purple animate-ping' : 'bg-ios-green animate-pulse'}`} />
+              <div className="absolute -bottom-10 bg-black/75 backdrop-blur-xl px-4 py-1.5 rounded-full border border-white/15 text-xs font-medium text-white shadow-2xl flex items-center space-x-2">
+                <span className={`w-2 h-2 rounded-full ${isAnalyzing ? 'bg-ios-blue animate-ping' : 'bg-ios-green'}`} />
                 <span>{scanStatusMessage}</span>
               </div>
             </div>
@@ -374,7 +403,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         )}
 
         {/* Top Floating Action Controls (Torch, Flip Camera, Sample Shelf) */}
-        <div className="absolute top-3 left-4 right-4 flex justify-between items-center pointer-events-auto z-10">
+        <div className="absolute top-3 left-4 right-4 flex justify-between items-center pointer-events-auto z-20">
           <button
             onClick={toggleTorch}
             className="w-10 h-10 rounded-full ios-glass flex items-center justify-center text-white hover:bg-white/10 active:scale-95 transition-all"
@@ -388,7 +417,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               onClick={() => setIsSimulatedShelfOpen(!isSimulatedShelfOpen)}
               className="px-3 py-1.5 rounded-full ios-glass text-xs font-semibold text-white flex items-center space-x-1.5 border border-white/10 hover:bg-white/10 active:scale-95 transition-all"
             >
-              <Layers className="w-3.5 h-3.5 text-ios-mint" />
+              <Layers className="w-3.5 h-3.5 text-ios-blue" />
               <span>Mart Shelf</span>
             </button>
 
@@ -402,48 +431,83 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           </div>
         </div>
 
-        {/* Bottom Shutter / Instant AI Scan Trigger */}
-        <div className="absolute bottom-4 left-0 right-0 flex justify-center items-center pointer-events-auto z-10">
-          <div className="flex items-center space-x-6">
-            
-            {/* Quick Cart Preview */}
+        {/* Bottom Shutter & Camera Controls */}
+        <div className="absolute bottom-5 left-0 right-0 flex justify-between items-center px-7 pointer-events-auto z-20">
+          
+          {/* Bottom-Left: Latest Snapshot Preview Thumbnail OR Cart Preview */}
+          <div className="w-14 flex items-center justify-start">
+            {latestSnapshotUrl ? (
+              <button
+                onClick={onOpenCart}
+                className="relative w-12 h-12 rounded-xl overflow-hidden border-2 border-white/80 shadow-2xl active:scale-90 transition-transform group"
+                title="View Scanned Photo in Cart"
+              >
+                <img
+                  src={latestSnapshotUrl}
+                  alt="Recent Scan Snapshot"
+                  className="w-full h-full object-cover"
+                />
+                <span className="absolute bottom-0 inset-x-0 bg-black/70 text-[8px] font-bold text-ios-blue text-center py-0.2">
+                  Snap
+                </span>
+              </button>
+            ) : (
+              <button
+                onClick={onOpenCart}
+                className="w-12 h-12 rounded-full ios-glass flex items-center justify-center text-white hover:bg-white/10 active:scale-95 transition-all relative shadow-xl"
+                aria-label="View Cart"
+              >
+                <ShoppingBag className="w-5 h-5 text-ios-blue" />
+                {cartCount > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-ios-blue text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center ring-2 ring-black">
+                    {cartCount}
+                  </span>
+                )}
+              </button>
+            )}
+          </div>
+
+          {/* Center: Apple-style Optical Shutter Button */}
+          <div className="flex flex-col items-center">
+            <button
+              onClick={handleCaptureSnapshot}
+              disabled={isAnalyzing}
+              className={`w-18 h-18 p-1 rounded-full border-4 border-white/90 hover:border-white active:scale-90 transition-all flex items-center justify-center shadow-[0_0_25px_rgba(0,0,0,0.8)] group ${
+                isAnalyzing ? 'opacity-60 cursor-not-allowed' : ''
+              }`}
+              aria-label="Capture Snapshot & Identify Product"
+            >
+              <div className="w-14 h-14 rounded-full bg-white group-hover:bg-zinc-200 transition-colors flex items-center justify-center shadow-inner">
+                {isAnalyzing ? (
+                  <RefreshCw className="w-6 h-6 text-black animate-spin" />
+                ) : (
+                  <div className="w-12 h-12 rounded-full border border-black/10 flex items-center justify-center">
+                    <Camera className="w-6 h-6 text-black" />
+                  </div>
+                )}
+              </div>
+            </button>
+            <span className="text-[10px] text-zinc-400 mt-1 font-medium tracking-tight">
+              Tap to Snap & Scan
+            </span>
+          </div>
+
+          {/* Bottom-Right: Cart / Mart Shelf Shortcut */}
+          <div className="w-14 flex items-center justify-end">
             <button
               onClick={onOpenCart}
-              className="w-12 h-12 rounded-full ios-glass flex flex-col items-center justify-center text-white hover:bg-white/10 active:scale-95 transition-all relative"
+              className="w-12 h-12 rounded-full ios-glass flex items-center justify-center text-white hover:bg-white/10 active:scale-95 transition-all relative shadow-xl"
               aria-label="View Cart"
             >
-              <ShoppingBag className="w-5 h-5 text-ios-blue" />
+              <ShoppingBag className="w-5 h-5 text-zinc-300" />
               {cartCount > 0 && (
                 <span className="absolute -top-1 -right-1 bg-ios-blue text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center ring-2 ring-black">
                   {cartCount}
                 </span>
               )}
             </button>
-
-            {/* Giant Optical Shutter Button */}
-            <button
-              onClick={() => handleCaptureSnapshot()}
-              disabled={isAnalyzing}
-              className={`w-18 h-18 p-1.5 rounded-full border-4 border-white/80 hover:border-white active:scale-90 transition-all flex items-center justify-center shadow-2xl group ${
-                isAnalyzing ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
-              aria-label="Scan Product"
-            >
-              <div className="w-14 h-14 rounded-full bg-white group-hover:bg-zinc-200 transition-colors flex items-center justify-center shadow-lg">
-                <Sparkles className={`w-6 h-6 ${isAnalyzing ? 'text-ios-purple animate-spin' : 'text-black'}`} />
-              </div>
-            </button>
-
-            {/* Quick Shelf Opener */}
-            <button
-              onClick={() => setIsSimulatedShelfOpen(true)}
-              className="w-12 h-12 rounded-full ios-glass flex items-center justify-center text-zinc-300 hover:text-white active:scale-95 transition-all"
-              aria-label="Open Sample Items"
-            >
-              <Layers className="w-5 h-5 text-ios-orange" />
-            </button>
-
           </div>
+
         </div>
 
       </div>
@@ -454,7 +518,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           <div className="flex justify-between items-center pb-2 border-b border-white/10">
             <div>
               <h4 className="text-sm font-bold text-white flex items-center space-x-1.5">
-                <Layers className="w-4 h-4 text-ios-green" />
+                <Layers className="w-4 h-4 text-ios-blue" />
                 <span>Supercenter & Mart Shelf Simulator</span>
               </h4>
               <p className="text-[11px] text-zinc-400">
@@ -477,7 +541,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                 onClick={() => setShelfCategory(cat)}
                 className={`px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all ${
                   shelfCategory === cat
-                    ? 'bg-ios-green text-black font-bold shadow'
+                    ? 'bg-white text-black font-bold shadow'
                     : 'bg-zinc-800/80 text-zinc-400 hover:text-white'
                 }`}
               >
@@ -494,7 +558,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                   handleQuickScan(prod);
                   setIsSimulatedShelfOpen(false);
                 }}
-                className="flex items-center space-x-2 p-2 rounded-2xl bg-zinc-900/80 border border-white/5 hover:border-ios-green/50 active:scale-95 transition-all text-left"
+                className="flex items-center space-x-2 p-2 rounded-2xl bg-zinc-900/80 border border-white/5 hover:border-ios-blue/50 active:scale-95 transition-all text-left"
               >
                 <img
                   src={prod.image}

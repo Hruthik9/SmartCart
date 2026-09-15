@@ -40,6 +40,7 @@ export const ShoppingList: React.FC<ShoppingListProps> = ({
   const grandTotal = subtotal + estTax;
   const isOverBudget = grandTotal > budgetLimit;
   const swapCount = items.filter(i => i.product.healthierAlternativeId || i.product.cheaperAlternativeId).length;
+  const snapshotCount = items.filter(i => i.snapshotUrl || i.product.snapshotUrl).length;
 
   return (
     <div className="w-full h-full flex flex-col bg-black text-white px-4 pt-2 pb-24 overflow-hidden">
@@ -54,7 +55,10 @@ export const ShoppingList: React.FC<ShoppingListProps> = ({
             </span>
           </h1>
           <p className="text-xs text-zinc-400">
-            Tap items to view nutritional facts
+            {snapshotCount > 0 
+              ? `${snapshotCount} camera photo${snapshotCount === 1 ? '' : 's'} captured • Tap to inspect`
+              : 'Tap items to view details & nutritional facts'
+            }
           </p>
         </div>
 
@@ -105,8 +109,12 @@ export const ShoppingList: React.FC<ShoppingListProps> = ({
             </p>
           </div>
         ) : (
-          items.map(({ product, quantity, checked }) => {
+          items.map((item) => {
+            const { product, quantity, checked } = item;
             const hasSwap = product.healthierAlternativeId || product.cheaperAlternativeId;
+            const itemImage = item.snapshotUrl || product.snapshotUrl || product.image;
+            const hasSnapshot = !!(item.snapshotUrl || product.snapshotUrl);
+
             return (
               <div
                 key={product.id}
@@ -130,20 +138,36 @@ export const ShoppingList: React.FC<ShoppingListProps> = ({
                     {checked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                   </button>
 
-                  {/* Product Thumbnail */}
-                  <img
-                    src={product.image}
-                    alt={product.name}
+                  {/* Product Thumbnail with Snapshot Badge */}
+                  <div 
                     onClick={() => onInspectProduct(product)}
-                    className="w-12 h-12 rounded-xl object-cover border border-white/10 flex-shrink-0 cursor-pointer"
-                  />
+                    className="relative w-12 h-12 rounded-xl overflow-hidden border border-white/10 flex-shrink-0 cursor-pointer group shadow"
+                  >
+                    <img
+                      src={itemImage}
+                      alt={product.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    />
+                    {hasSnapshot && (
+                      <span className="absolute bottom-0 right-0 px-1 py-0.2 bg-ios-blue text-[8px] font-black text-white rounded-tl-md shadow">
+                        📸
+                      </span>
+                    )}
+                  </div>
 
                   {/* Details */}
                   <div 
                     onClick={() => onInspectProduct(product)}
                     className="flex-1 min-w-0 cursor-pointer"
                   >
-                    <p className="text-[10px] font-medium text-ios-blue truncate">{product.brand}</p>
+                    <div className="flex items-center space-x-1.5">
+                      <p className="text-[10px] font-medium text-ios-blue truncate">{product.brand}</p>
+                      {hasSnapshot && (
+                        <span className="text-[8px] font-bold px-1 py-0.2 rounded bg-ios-blue/20 text-ios-blue border border-ios-blue/30">
+                          Live Snap
+                        </span>
+                      )}
+                    </div>
                     <p className={`text-xs font-bold leading-tight truncate ${checked ? 'line-through text-zinc-400' : 'text-white'}`}>
                       {product.name}
                     </p>

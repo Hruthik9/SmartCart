@@ -78,6 +78,10 @@ export const App: React.FC = () => {
       if (existingIdx >= 0) {
         const updated = [...prev];
         updated[existingIdx].quantity += quantity;
+        if (product.snapshotUrl) {
+          updated[existingIdx].snapshotUrl = product.snapshotUrl;
+          updated[existingIdx].product.snapshotUrl = product.snapshotUrl;
+        }
         return updated;
       } else {
         return [...prev, {
@@ -86,6 +90,7 @@ export const App: React.FC = () => {
           addedVia,
           timestamp: Date.now(),
           checked: false,
+          snapshotUrl: product.snapshotUrl,
         }];
       }
     });

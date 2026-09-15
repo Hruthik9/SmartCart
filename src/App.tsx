@@ -53,27 +53,20 @@ const loadInitialCartItems = (): CartItem[] => {
     const saved = localStorage.getItem(CART_STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) {
+        // Filter out legacy default items (Dole Pineapple, Pure Whey Protein) so the cart is clean
+        const cleaned = parsed.filter(item => 
+          item.product.id !== 'prod-pineapple' && 
+          item.product.id !== 'prod-store-protein' &&
+          item.product.id !== 'prod-whey-protein'
+        );
+        return cleaned;
+      }
     }
   } catch (e) {
     console.warn('Could not read saved cart items:', e);
   }
-  return [
-    {
-      product: GROCERY_CATALOG[0], // Honey Nut Cheerios ($5.49, Nutri C)
-      quantity: 1,
-      addedVia: 'manual',
-      timestamp: Date.now() - 60000,
-      checked: false,
-    },
-    {
-      product: GROCERY_CATALOG[3], // Silk Vanilla Almond Milk ($4.79, Nutri C)
-      quantity: 1,
-      addedVia: 'manual',
-      timestamp: Date.now() - 30000,
-      checked: true,
-    }
-  ];
+  return [];
 };
 
 const saveCartToStorage = (items: CartItem[]) => {

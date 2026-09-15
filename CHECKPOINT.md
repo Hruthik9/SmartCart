@@ -52,7 +52,7 @@ graph TD
 
 | State Variable | Type | Description |
 | :--- | :--- | :--- |
-| `cartItems` | `CartItem[]` | Active shopping cart items, quantities, checked status, and snapshot URLs. Synced to `localStorage` key `'smartcart_cart_items'`. |
+| `cartItems` | `CartItem[]` | Active shopping cart items, quantities, checked status, and snapshot URLs (starts empty `[]` by default). Synced to `localStorage` key `'smartcart_cart_items'`. |
 | `scannedRecords` | `ScannedRecord[]` | Complete history of all products and live camera snapshots captured during the shopping walk. Synced to `localStorage` key `'smartcart_scanned_session_records'`. |
 | `budgetLimit` | `number` | User-defined budget threshold (default: `$35.00`). |
 | `currentTab` | `'scan' \| 'cart' \| 'swaps' \| 'budget'` | Active visual tab in the viewport. |

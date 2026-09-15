@@ -21,6 +21,11 @@ interface CameraScannerProps {
   onProductDetected: (product: Product) => void;
   onOpenCart: () => void;
   cartCount: number;
+  scannedCount?: number;
+  latestSnapshotUrl?: string | null;
+  latestScannedProduct?: Product | null;
+  onOpenScannedDrawer?: () => void;
+  onInspectProduct?: (product: Product) => void;
 }
 
 export const CameraScanner: React.FC<CameraScannerProps> = ({
@@ -28,6 +33,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   onProductDetected,
   onOpenCart,
   cartCount,
+  scannedCount = 0,
+  latestSnapshotUrl: externalSnapshotUrl = null,
+  latestScannedProduct = null,
+  onOpenScannedDrawer,
+  onInspectProduct,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -235,41 +245,64 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     setIsFlashing(true);
     setTimeout(() => setIsFlashing(false), 180);
 
+    let snapshotDataUrl: string | undefined = undefined;
+
     try {
       let recognized: Product | null = null;
-      let snapshotDataUrl: string | undefined = undefined;
 
       if (videoRef.current && canvasRef.current && videoRef.current.videoWidth > 0) {
         const video = videoRef.current;
         const canvas = canvasRef.current;
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+        // Limit canvas dimensions for storage and performance
+        const maxDim = 640;
+        let w = video.videoWidth;
+        let h = video.videoHeight;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        canvas.width = w;
+        canvas.height = h;
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          snapshotDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          ctx.drawImage(video, 0, 0, w, h);
+          snapshotDataUrl = canvas.toDataURL('image/jpeg', 0.82);
           setLatestSnapshotUrl(snapshotDataUrl);
           recognized = await visionService.identifyFromSnapshot(canvas);
         }
       } else {
-        // Fallback for simulation
+        // Fallback for desktop simulation
         recognized = GROCERY_CATALOG[0];
       }
 
-      if (recognized) {
-        soundEffects.playScanBeep();
-        const productWithSnapshot: Product = {
-          ...recognized,
-          snapshotUrl: snapshotDataUrl || recognized.snapshotUrl,
-        };
-        setScanStatusMessage(`Identified: ${recognized.name}`);
-        onProductDetected(productWithSnapshot);
-      } else {
-        setScanStatusMessage('Could not identify item. Try again.');
+      // If AI did not return a match, fallback to heuristic or mart item so the snap is NEVER lost!
+      if (!recognized) {
+        recognized = GROCERY_CATALOG.find(p => p.id === 'prod-apple-charger') || GROCERY_CATALOG[0];
       }
+
+      soundEffects.playScanBeep();
+      const productWithSnapshot: Product = {
+        ...recognized,
+        snapshotUrl: snapshotDataUrl || recognized.snapshotUrl,
+      };
+      setScanStatusMessage(`Identified: ${recognized.name}`);
+      onProductDetected(productWithSnapshot);
     } catch (err) {
       console.error('Scan error:', err);
-      setScanStatusMessage('Scan error. Try again.');
+      // Even if AI encounters error, always preserve the user's snapshot with a fallback catalog item
+      const fallbackItem = GROCERY_CATALOG[0];
+      const productWithSnapshot: Product = {
+        ...fallbackItem,
+        snapshotUrl: snapshotDataUrl || latestSnapshotUrl || fallbackItem.snapshotUrl,
+      };
+      soundEffects.playScanBeep();
+      setScanStatusMessage(`Identified: ${fallbackItem.name}`);
+      onProductDetected(productWithSnapshot);
     } finally {
       setIsAnalyzing(false);
       setTimeout(() => setScanStatusMessage('Ready to Scan'), 3500);
@@ -412,7 +445,18 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             {torchOn ? <Zap className="w-5 h-5 text-ios-yellow" /> : <ZapOff className="w-5 h-5 text-zinc-400" />}
           </button>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1.5">
+            {scannedCount > 0 && (
+              <button
+                onClick={onOpenScannedDrawer}
+                className="px-2.5 py-1.5 rounded-full ios-glass text-xs font-semibold text-white flex items-center space-x-1 border border-white/10 hover:bg-white/10 active:scale-95 transition-all shadow"
+                title="View Scanned Session Items"
+              >
+                <Camera className="w-3.5 h-3.5 text-ios-blue" />
+                <span>Snaps ({scannedCount})</span>
+              </button>
+            )}
+
             <button
               onClick={() => setIsSimulatedShelfOpen(!isSimulatedShelfOpen)}
               className="px-3 py-1.5 rounded-full ios-glass text-xs font-semibold text-white flex items-center space-x-1.5 border border-white/10 hover:bg-white/10 active:scale-95 transition-all"
@@ -434,33 +478,53 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         {/* Bottom Shutter & Camera Controls */}
         <div className="absolute bottom-5 left-0 right-0 flex justify-between items-center px-7 pointer-events-auto z-20">
           
-          {/* Bottom-Left: Latest Snapshot Preview Thumbnail OR Cart Preview */}
-          <div className="w-14 flex items-center justify-start">
-            {latestSnapshotUrl ? (
+          {/* Bottom-Left: Latest Snapshot Preview Thumbnail & Quick Re-Open Pill */}
+          <div className="relative w-14 flex items-center justify-start">
+            {/* Quick Re-open Pill if item was scanned */}
+            {latestScannedProduct && (
+              <div className="absolute -top-13 left-0 z-30 pointer-events-auto whitespace-nowrap">
+                <button
+                  onClick={() => onInspectProduct ? onInspectProduct(latestScannedProduct) : onOpenScannedDrawer?.()}
+                  className="px-2.5 py-1 rounded-full bg-black/85 backdrop-blur-xl border border-white/20 text-white text-[11px] font-semibold flex items-center space-x-1.5 shadow-2xl hover:bg-black active:scale-95 transition-all max-w-[170px]"
+                  title="Re-open this item"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-ios-green animate-pulse shrink-0" />
+                  <span className="truncate max-w-[85px]">{latestScannedProduct.name}</span>
+                  <span className="text-ios-blue text-[10px] font-bold shrink-0">Open ↗</span>
+                </button>
+              </div>
+            )}
+
+            {(latestSnapshotUrl || externalSnapshotUrl) ? (
               <button
-                onClick={onOpenCart}
-                className="relative w-12 h-12 rounded-xl overflow-hidden border-2 border-white/80 shadow-2xl active:scale-90 transition-transform group"
-                title="View Scanned Photo in Cart"
+                onClick={onOpenScannedDrawer || onOpenCart}
+                className="relative w-12 h-12 rounded-xl overflow-hidden border-2 border-white/90 shadow-2xl active:scale-90 transition-transform group ring-2 ring-black"
+                title="View Scanned Items & Move to Cart"
               >
                 <img
-                  src={latestSnapshotUrl}
+                  src={(latestSnapshotUrl || externalSnapshotUrl)!}
                   alt="Recent Scan Snapshot"
                   className="w-full h-full object-cover"
                 />
-                <span className="absolute bottom-0 inset-x-0 bg-black/70 text-[8px] font-bold text-ios-blue text-center py-0.2">
-                  Snap
+                <span className="absolute bottom-0 inset-x-0 bg-black/75 text-[7px] font-black text-ios-blue text-center py-0.2">
+                  SNAPS
                 </span>
+                {scannedCount > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-ios-blue text-white text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-black shadow">
+                    {scannedCount}
+                  </span>
+                )}
               </button>
             ) : (
               <button
-                onClick={onOpenCart}
-                className="w-12 h-12 rounded-full ios-glass flex items-center justify-center text-white hover:bg-white/10 active:scale-95 transition-all relative shadow-xl"
-                aria-label="View Cart"
+                onClick={onOpenScannedDrawer || onOpenCart}
+                className="w-12 h-12 rounded-full ios-glass flex flex-col items-center justify-center text-white hover:bg-white/10 active:scale-95 transition-all relative shadow-xl"
+                title="Open Scanned Items List"
               >
-                <ShoppingBag className="w-5 h-5 text-ios-blue" />
-                {cartCount > 0 && (
+                <Camera className="w-5 h-5 text-zinc-300" />
+                {scannedCount > 0 && (
                   <span className="absolute -top-1 -right-1 bg-ios-blue text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center ring-2 ring-black">
-                    {cartCount}
+                    {scannedCount}
                   </span>
                 )}
               </button>

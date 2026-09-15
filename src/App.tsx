@@ -11,14 +11,54 @@ import { SmartSwaps } from './components/SmartSwaps';
 import { BudgetTracker } from './components/BudgetTracker';
 import { ProductCardModal } from './components/ProductCardModal';
 import { VoiceAssistantModal } from './components/VoiceAssistantModal';
-import type { CartItem, Product, ProductCategory } from './types/grocery';
+import { ScannedItemsDrawer } from './components/ScannedItemsDrawer';
+import type { CartItem, Product, ProductCategory, ScannedRecord } from './types/grocery';
 import { GROCERY_CATALOG, PRODUCT_BY_ID } from './data/groceryCatalog';
 import { speechAssistant } from './services/speechService';
 import { soundEffects } from './services/soundEffects';
 
-export const App: React.FC = () => {
-  // Cart & Budget State (pre-populated with 2 relatable items so the user can immediately test Smart Swaps & Budget)
-  const [cartItems, setCartItems] = useState<CartItem[]>([
+const SCANNED_STORAGE_KEY = 'smartcart_scanned_session_records';
+const CART_STORAGE_KEY = 'smartcart_cart_items';
+
+const loadInitialScannedRecords = (): ScannedRecord[] => {
+  try {
+    const saved = localStorage.getItem(SCANNED_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (e) {
+    console.warn('Could not read saved scanned records:', e);
+  }
+  return [];
+};
+
+const saveScannedToStorage = (records: ScannedRecord[]) => {
+  try {
+    const trimmed = records.slice(0, 25);
+    localStorage.setItem(SCANNED_STORAGE_KEY, JSON.stringify(trimmed));
+  } catch (e) {
+    console.warn('Storage quota limit reached, trimming base64 URLs:', e);
+    try {
+      const lightweight = records.slice(0, 15).map((r, i) => i < 5 ? r : { ...r, snapshotUrl: undefined });
+      localStorage.setItem(SCANNED_STORAGE_KEY, JSON.stringify(lightweight));
+    } catch {
+      // Ignore
+    }
+  }
+};
+
+const loadInitialCartItems = (): CartItem[] => {
+  try {
+    const saved = localStorage.getItem(CART_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (e) {
+    console.warn('Could not read saved cart items:', e);
+  }
+  return [
     {
       product: GROCERY_CATALOG[0], // Honey Nut Cheerios ($5.49, Nutri C)
       quantity: 1,
@@ -33,7 +73,20 @@ export const App: React.FC = () => {
       timestamp: Date.now() - 30000,
       checked: true,
     }
-  ]);
+  ];
+};
+
+const saveCartToStorage = (items: CartItem[]) => {
+  try {
+    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(items.slice(0, 50)));
+  } catch (e) {
+    console.warn('Could not save cart items:', e);
+  }
+};
+
+export const App: React.FC = () => {
+  // Cart & Budget State (persisted to localStorage)
+  const [cartItems, setCartItems] = useState<CartItem[]>(loadInitialCartItems);
 
   const [budgetLimit, setBudgetLimit] = useState<number>(35);
   const [currentTab, setCurrentTab] = useState<TabType>('scan');
@@ -41,6 +94,10 @@ export const App: React.FC = () => {
   const [voiceAssistantOpen, setVoiceAssistantOpen] = useState<boolean>(false);
   const [dynamicIslandState, setDynamicIslandState] = useState<DynamicIslandState>({ mode: 'idle' });
   const [lastVoiceFeedback, setLastVoiceFeedback] = useState<string>('');
+
+  // Scanned Session History (persisted to localStorage)
+  const [scannedRecords, setScannedRecords] = useState<ScannedRecord[]>(loadInitialScannedRecords);
+  const [isScannedDrawerOpen, setIsScannedDrawerOpen] = useState<boolean>(false);
 
   // Calculate totals
   const subtotal = cartItems.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
@@ -65,9 +122,67 @@ export const App: React.FC = () => {
     }
   }, [totalSpent, budgetLimit]);
 
-  // Handle camera item detection
+  // Handle camera item detection & save into scanned session history
   const handleProductDetected = (product: Product) => {
+    // Record into session scanned items (most recent first)
+    const newRecord: ScannedRecord = {
+      id: `scan-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      product,
+      snapshotUrl: product.snapshotUrl,
+      scannedAt: Date.now(),
+    };
+    setScannedRecords(prev => {
+      const updated = [newRecord, ...prev.filter(r => r.product.id !== product.id)];
+      saveScannedToStorage(updated);
+      return updated;
+    });
     setScannedProductModal(product);
+  };
+
+  // Add all pending scanned items to cart at once
+  const handleAddAllPendingToCart = () => {
+    const cartProductIds = new Set(cartItems.map(i => i.product.id));
+    const pending = scannedRecords.filter(r => !cartProductIds.has(r.product.id));
+    if (pending.length === 0) return;
+
+    soundEffects.playSwapChime();
+    setCartItems(prev => {
+      const additions: CartItem[] = pending.map(r => ({
+        product: r.product,
+        quantity: 1,
+        addedVia: 'camera',
+        timestamp: Date.now(),
+        checked: false,
+        snapshotUrl: r.snapshotUrl,
+      }));
+      const updated = [...prev, ...additions];
+      saveCartToStorage(updated);
+      return updated;
+    });
+
+    confetti({
+      particleCount: 50,
+      spread: 60,
+      origin: { y: 0.7 },
+    });
+
+    setDynamicIslandState({ mode: 'scanned', product: pending[0].product });
+    setTimeout(() => setDynamicIslandState({ mode: 'idle' }), 3500);
+  };
+
+  const handleDeleteScannedRecord = (recordId: string) => {
+    setScannedRecords(prev => {
+      const updated = prev.filter(r => r.id !== recordId);
+      saveScannedToStorage(updated);
+      return updated;
+    });
+  };
+
+  const handleClearScannedHistory = () => {
+    setScannedRecords([]);
+    try {
+      localStorage.removeItem(SCANNED_STORAGE_KEY);
+    } catch {}
   };
 
   // Add item to cart
@@ -75,16 +190,16 @@ export const App: React.FC = () => {
     soundEffects.playScanBeep();
     setCartItems(prev => {
       const existingIdx = prev.findIndex(item => item.product.id === product.id);
+      let updated: CartItem[];
       if (existingIdx >= 0) {
-        const updated = [...prev];
+        updated = [...prev];
         updated[existingIdx].quantity += quantity;
         if (product.snapshotUrl) {
           updated[existingIdx].snapshotUrl = product.snapshotUrl;
           updated[existingIdx].product.snapshotUrl = product.snapshotUrl;
         }
-        return updated;
       } else {
-        return [...prev, {
+        updated = [...prev, {
           product,
           quantity,
           addedVia,
@@ -93,6 +208,8 @@ export const App: React.FC = () => {
           snapshotUrl: product.snapshotUrl,
         }];
       }
+      saveCartToStorage(updated);
+      return updated;
     });
 
     setScannedProductModal(null);
@@ -106,17 +223,19 @@ export const App: React.FC = () => {
   // Perform 1-tap smart swap
   const handleSwapItem = (originalProductId: string, newProduct: Product, savings: number) => {
     setCartItems(prev => {
-      return prev.map(item => {
+      const updated = prev.map(item => {
         if (item.product.id === originalProductId) {
           return {
             ...item,
             product: newProduct,
-            addedVia: 'swap',
+            addedVia: 'swap' as const,
             timestamp: Date.now(),
           };
         }
         return item;
       });
+      saveCartToStorage(updated);
+      return updated;
     });
 
     setDynamicIslandState({ mode: 'swap_saved', amount: savings });
@@ -128,36 +247,47 @@ export const App: React.FC = () => {
   // Update item quantity
   const handleUpdateQuantity = (productId: string, delta: number) => {
     setCartItems(prev => {
-      return prev.map(item => {
+      const updated = prev.map(item => {
         if (item.product.id === productId) {
           const newQty = item.quantity + delta;
           return newQty > 0 ? { ...item, quantity: newQty } : null;
         }
         return item;
       }).filter(Boolean) as CartItem[];
+      saveCartToStorage(updated);
+      return updated;
     });
   };
 
   // Toggle item collected/checked
   const handleToggleChecked = (productId: string) => {
     setCartItems(prev => {
-      return prev.map(item => {
+      const updated = prev.map(item => {
         if (item.product.id === productId) {
           return { ...item, checked: !item.checked };
         }
         return item;
       });
+      saveCartToStorage(updated);
+      return updated;
     });
   };
 
   // Remove single item
   const handleRemoveItem = (productId: string) => {
-    setCartItems(prev => prev.filter(item => item.product.id !== productId));
+    setCartItems(prev => {
+      const updated = prev.filter(item => item.product.id !== productId);
+      saveCartToStorage(updated);
+      return updated;
+    });
   };
 
   // Clear all
   const handleClearCart = () => {
     setCartItems([]);
+    try {
+      localStorage.removeItem(CART_STORAGE_KEY);
+    } catch {}
   };
 
   // Inspect product in modal
@@ -291,6 +421,11 @@ export const App: React.FC = () => {
             onProductDetected={handleProductDetected}
             onOpenCart={() => setCurrentTab('cart')}
             cartCount={totalItemsCount}
+            scannedCount={scannedRecords.length}
+            latestSnapshotUrl={scannedRecords[0]?.snapshotUrl || null}
+            latestScannedProduct={scannedRecords[0]?.product || null}
+            onOpenScannedDrawer={() => setIsScannedDrawerOpen(true)}
+            onInspectProduct={handleInspectProduct}
           />
         </div>
 
@@ -332,6 +467,27 @@ export const App: React.FC = () => {
         cartItemCount={totalItemsCount}
         availableSwapsCount={availableSwapsCount}
         onOpenVoice={() => setVoiceAssistantOpen(true)}
+      />
+
+      {/* Scanned Items Session Drawer (view snaps, review, and move to cart) */}
+      <ScannedItemsDrawer
+        isOpen={isScannedDrawerOpen}
+        onClose={() => setIsScannedDrawerOpen(false)}
+        scannedRecords={scannedRecords}
+        cartItems={cartItems}
+        onAddToCart={(prod, qty) => handleAddToCart(prod, qty, 'camera')}
+        onUpdateQuantity={handleUpdateQuantity}
+        onInspectProduct={(prod) => {
+          setIsScannedDrawerOpen(false);
+          setScannedProductModal(prod);
+        }}
+        onClearHistory={handleClearScannedHistory}
+        onDeleteRecord={handleDeleteScannedRecord}
+        onAddAllPendingToCart={handleAddAllPendingToCart}
+        onOpenCart={() => {
+          setIsScannedDrawerOpen(false);
+          setCurrentTab('cart');
+        }}
       />
 
       {/* Product Detail & Add Bottom Sheet Modal */}

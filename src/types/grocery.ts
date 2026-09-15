@@ -57,6 +57,13 @@ export interface CartItem {
   snapshotUrl?: string; // Stored photo captured from camera scanner
 }
 
+export interface ScannedRecord {
+  id: string;
+  product: Product;
+  snapshotUrl?: string;
+  scannedAt: number;
+}
+
 export interface SwapRecommendation {
   id: string;
   type: 'healthier' | 'cheaper';

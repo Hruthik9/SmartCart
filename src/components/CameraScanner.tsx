@@ -8,7 +8,8 @@ import {
   Sparkles, 
   Layers, 
   ChevronDown,
-  RefreshCw
+  RefreshCw,
+  AlertCircle
 } from 'lucide-react';
 import type { Product } from '../types/grocery';
 import { GROCERY_CATALOG } from '../data/groceryCatalog';
@@ -32,6 +33,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [isVideoReady, setIsVideoReady] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [torchOn, setTorchOn] = useState<boolean>(false);
@@ -39,85 +41,176 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [lastDetectedId, setLastDetectedId] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [scanStatusMessage, setScanStatusMessage] = useState<string>('Align Item');
+  const [isRequesting, setIsRequesting] = useState<boolean>(false);
 
-  // Start camera stream safely
-  const startCamera = useCallback(async () => {
-    try {
-      setCameraError(null);
-
-      // Check for HTTPS secure context on mobile devices
-      if (typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        setCameraError('On mobile phones, camera access requires HTTPS. Please open using https:// in your browser.');
-        return;
-      }
-
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setCameraError('Camera API is not supported in this browser. You can still use the sample grocery shelf!');
-        return;
-      }
-
-      // Stop any existing tracks before creating a new one
-      if (stream) {
-        stream.getTracks().forEach(t => t.stop());
-      }
-
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      };
-
-      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-      setStream(mediaStream);
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-        videoRef.current.setAttribute('playsinline', 'true');
-        videoRef.current.setAttribute('webkit-playsinline', 'true');
-        videoRef.current.muted = true;
+  // Helper to stop all tracks
+  const stopTracks = useCallback((s: MediaStream | null) => {
+    if (s) {
+      s.getTracks().forEach(track => {
         try {
-          await videoRef.current.play();
+          track.stop();
         } catch {
-          // Will play on user touch
+          // ignore
         }
-      }
-    } catch (err: unknown) {
-      console.warn('Camera error:', err);
-      const errName = (err as Error)?.name || '';
-      if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
-        setCameraError('Camera permission was denied. Please allow camera access in browser settings.');
-      } else {
-        setCameraError('Camera could not start. You can tap "Open Quick-Scan Shelf" to test products instantly.');
-      }
+      });
     }
-  }, [facingMode]);
-
-  // Initialize camera when active
-  useEffect(() => {
-    if (isActive) {
-      if (!stream) {
-        startCamera();
-      } else if (videoRef.current && videoRef.current.paused) {
-        videoRef.current.play().catch(() => {});
-      }
-    }
-  }, [isActive, startCamera, stream]);
-
-  // Cleanup only on true unmount of app
-  useEffect(() => {
-    return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
-    };
   }, []);
 
-  // Live video detection loop for barcodes (only when tab is active)
+  // Multi-tier camera launcher supporting iOS Safari & all mobile browsers
+  const startCamera = useCallback(async () => {
+    try {
+      setIsRequesting(true);
+      setCameraError(null);
+
+      // Check HTTPS secure context on mobile devices
+      if (typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        setCameraError('On iPhone, camera access requires HTTPS. Please ensure your site URL starts with https://');
+        setIsRequesting(false);
+        return;
+      }
+
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraError('Camera API is not supported in this browser. Please open in Safari or Chrome, or use the Mart Shelf below.');
+        setIsRequesting(false);
+        return;
+      }
+
+      // Stop old tracks before requesting new stream
+      if (stream) {
+        stopTracks(stream);
+        setStream(null);
+      }
+
+      // Tiered constraints: try ideal resolution, then relaxed, then bare minimum
+      const constraintTiers: MediaStreamConstraints[] = [
+        {
+          video: {
+            facingMode: { ideal: facingMode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        },
+        {
+          video: {
+            facingMode: { ideal: facingMode },
+          },
+          audio: false,
+        },
+        {
+          video: {
+            facingMode: facingMode,
+          },
+          audio: false,
+        },
+        {
+          video: true,
+          audio: false,
+        }
+      ];
+
+      let mediaStream: MediaStream | null = null;
+      let lastErr: unknown = null;
+
+      for (const constraints of constraintTiers) {
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+          if (mediaStream) break;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+
+      if (!mediaStream) {
+        throw lastErr || new Error('Unable to access camera with any constraints');
+      }
+
+      setStream(mediaStream);
+      setCameraError(null);
+    } catch (err: unknown) {
+      console.warn('Camera startup error:', err);
+      const errName = (err as Error)?.name || '';
+      const errMsg = (err as Error)?.message || '';
+
+      if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
+        setCameraError(
+          'Camera access was denied. In Safari on iPhone: Tap "aA" (or the lock/settings icon) in the address bar → Website Settings → Camera → Allow, then tap Retry below.'
+        );
+      } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+        setCameraError('No camera was found on this device. You can test products using the Mart Shelf below.');
+      } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
+        setCameraError('Camera is currently in use by another app or browser tab. Please close other camera apps and retry.');
+      } else {
+        setCameraError(`Camera error (${errName || errMsg || 'unknown'}). Tap Retry Camera below.`);
+      }
+      setIsVideoReady(false);
+    } finally {
+      setIsRequesting(false);
+    }
+  }, [facingMode, stopTracks, stream]);
+
+  // Dedicated Effect: Bind stream to <video> and ensure playback on iOS Safari
   useEffect(() => {
-    if (!isActive) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (!stream) {
+      video.srcObject = null;
+      setIsVideoReady(false);
+      return;
+    }
+
+    video.srcObject = stream;
+    video.setAttribute('playsinline', 'true');
+    video.setAttribute('webkit-playsinline', 'true');
+    video.muted = true;
+
+    let isSubscribed = true;
+
+    const handleReady = () => {
+      if (isSubscribed) {
+        setIsVideoReady(true);
+        setCameraError(null);
+      }
+    };
+
+    video.onloadedmetadata = () => {
+      video.play().then(handleReady).catch((err) => {
+        console.warn('Playback waiting for interaction:', err);
+      });
+    };
+
+    video.onplaying = handleReady;
+
+    // Direct play trigger
+    video.play().then(handleReady).catch(() => {
+      // Browsers may require user tap
+    });
+
+    return () => {
+      isSubscribed = false;
+      video.onloadedmetadata = null;
+      video.onplaying = null;
+    };
+  }, [stream]);
+
+  // Initialize camera when active tab
+  useEffect(() => {
+    if (isActive && !stream && !cameraError) {
+      startCamera();
+    }
+  }, [isActive, stream, cameraError, startCamera]);
+
+  // Clean up on component unmount
+  useEffect(() => {
+    return () => {
+      stopTracks(stream);
+    };
+  }, [stopTracks, stream]);
+
+  // Live video detection loop for barcodes (only when tab is active and video is playing)
+  useEffect(() => {
+    if (!isActive || !isVideoReady) return;
 
     const interval = setInterval(async () => {
       if (!videoRef.current || videoRef.current.readyState < 2 || isAnalyzing) return;
@@ -132,7 +225,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     }, 600);
 
     return () => clearInterval(interval);
-  }, [isActive, isAnalyzing, lastDetectedId, onProductDetected]);
+  }, [isActive, isVideoReady, isAnalyzing, lastDetectedId, onProductDetected]);
 
   // Toggle flashlight (torch)
   const toggleTorch = async () => {
@@ -217,44 +310,57 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   return (
     <div className="relative w-full h-full flex flex-col bg-black overflow-hidden select-none">
       
-      {/* Viewfinder Background (Live Camera Feed or Camera Prompt) */}
+      {/* Viewfinder Background */}
       <div className="relative flex-1 w-full bg-zinc-950 overflow-hidden flex items-center justify-center">
-        {stream ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          /* Simulated camera view or permission prompt */
-          <div className="relative w-full h-full flex flex-col items-center justify-center bg-gradient-to-b from-zinc-900 via-black to-zinc-900 px-6 text-center">
+        
+        {/* Video element is ALWAYS mounted to preserve DOM reference */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`w-full h-full object-cover transition-opacity duration-300 ${
+            isVideoReady ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          }`}
+        />
+
+        {/* Fallback View / Permission Request Screen (shown when video is not actively streaming) */}
+        {!isVideoReady && (
+          <div className="absolute inset-0 z-0 flex flex-col items-center justify-center bg-gradient-to-b from-zinc-900 via-black to-zinc-900 px-6 text-center">
             <div className="w-20 h-20 rounded-full bg-zinc-800/80 border border-white/10 flex items-center justify-center mb-4 shadow-inner">
-              <Camera className="w-10 h-10 text-ios-green animate-pulse" />
+              {isRequesting ? (
+                <RefreshCw className="w-9 h-9 text-ios-blue animate-spin" />
+              ) : cameraError ? (
+                <AlertCircle className="w-9 h-9 text-ios-orange" />
+              ) : (
+                <Camera className="w-9 h-9 text-ios-green animate-pulse" />
+              )}
             </div>
-            <h3 className="text-base font-bold text-white mb-1">
-              Universal Store Scanner
+
+            <h3 className="text-base font-bold text-white mb-1.5">
+              {isRequesting ? 'Starting Camera...' : cameraError ? 'Camera Permission' : 'Live Camera Scanner'}
             </h3>
-            <p className="text-xs text-zinc-400 max-w-xs mb-4">
-              {cameraError || 'Scan any item at Walmart, Target, supermarkets, or department stores.'}
+
+            <p className="text-xs text-zinc-300 max-w-xs mb-5 leading-relaxed">
+              {cameraError || 'Allow camera access to scan Walmart, Target, supermarket products and barcodes directly with AI.'}
             </p>
 
-            <div className="flex flex-col space-y-2 w-full max-w-xs">
+            <div className="flex flex-col space-y-2.5 w-full max-w-xs">
               <button
                 onClick={startCamera}
-                className="w-full py-2.5 px-4 rounded-xl bg-ios-blue text-white font-semibold text-xs flex items-center justify-center space-x-2 shadow-lg active:scale-95 transition-all"
+                disabled={isRequesting}
+                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-ios-green to-ios-blue text-white font-semibold text-xs flex items-center justify-center space-x-2 shadow-lg active:scale-95 transition-all disabled:opacity-50"
               >
-                <RefreshCw className="w-4 h-4" />
-                <span>Enable Camera Access</span>
+                <RefreshCw className={`w-4 h-4 ${isRequesting ? 'animate-spin' : ''}`} />
+                <span>{cameraError ? 'Retry Camera Access' : 'Tap to Enable Camera'}</span>
               </button>
 
               <button
                 onClick={() => setIsSimulatedShelfOpen(true)}
-                className="w-full py-2 px-4 rounded-xl bg-zinc-800 text-zinc-300 font-semibold text-xs flex items-center justify-center space-x-1.5 hover:bg-zinc-700 active:scale-95 transition-all"
+                className="w-full py-2.5 px-4 rounded-xl bg-zinc-800/90 border border-white/10 text-zinc-200 font-semibold text-xs flex items-center justify-center space-x-1.5 hover:bg-zinc-700 active:scale-95 transition-all"
               >
                 <Layers className="w-4 h-4 text-ios-green" />
-                <span>Open Quick-Scan Mart Shelf</span>
+                <span>Open Mart Shelf (Quick-Scan Items)</span>
               </button>
             </div>
           </div>
@@ -268,11 +374,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           <div className="px-3 py-1 rounded-full bg-black/70 backdrop-blur-md border border-white/15 flex items-center space-x-1.5 text-[11px] font-semibold text-zinc-200 shadow-lg">
             <Sparkles className="w-3.5 h-3.5 text-ios-purple animate-pulse" />
             <span>Universal AI Mart Scanner</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-ios-green" />
+            <span className={`w-1.5 h-1.5 rounded-full ${isVideoReady ? 'bg-ios-green' : 'bg-ios-orange animate-ping'}`} />
           </div>
         </div>
 
-        {/* Scanning Reticle HUD Overlay */}
+        {/* Scanning Reticle HUD Overlay (Always visible or when video is ready) */}
         <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center px-8">
           
           {/* Target Box with Glowing Corners */}
@@ -306,7 +412,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
             {/* Floating Status Pill: "Align Item" */}
             <div className="absolute -bottom-10 bg-black/75 backdrop-blur-md px-3.5 py-1.5 rounded-full border border-white/10 text-xs font-medium text-zinc-200 flex items-center space-x-2 shadow-xl">
-              <div className={`w-2 h-2 rounded-full ${isAnalyzing ? 'bg-ios-purple animate-ping' : 'bg-ios-green animate-pulse'}`} />
+              <div className={`w-2 h-2 rounded-full ${isAnalyzing ? 'bg-ios-purple animate-ping' : isVideoReady ? 'bg-ios-green animate-pulse' : 'bg-ios-yellow'}`} />
               <span>{scanStatusMessage}</span>
             </div>
           </div>

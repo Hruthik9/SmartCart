@@ -1,0 +1,5 @@
+/*
+  Permissions-Policy: camera=(self), microphone=(self), geolocation=*
+  Access-Control-Allow-Origin: *
+  X-Frame-Options: SAMEORIGIN
+  X-Content-Type-Options: nosniff

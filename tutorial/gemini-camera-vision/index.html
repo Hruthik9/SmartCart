@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Camera + Gemini Vision Tutorial</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Camera + Gemini Vision</h1>
+      <p class="sub">Tutorial demo: take a photo with the phone camera and ask Gemini what product it is.</p>
+
+      <section class="row">
+        <label>API key
+          <input id="apiKey" type="password" placeholder="Paste Gemini API key (or use .env.local)" autocomplete="off" />
+        </label>
+        <label>Model
+          <input id="model" type="text" value="gemini-3.8-flash" />
+        </label>
+      </section>
+
+      <div class="camera">
+        <video id="video" playsinline muted autoplay></video>
+        <canvas id="canvas" hidden></canvas>
+        <img id="photo" alt="Captured photo" hidden />
+      </div>
+
+      <section class="row buttons">
+        <button id="startBtn">1. Start camera</button>
+        <button id="snapBtn" disabled>2. Take photo</button>
+        <button id="askBtn" disabled>3. Ask Gemini</button>
+      </section>
+
+      <label class="prompt">Prompt
+        <textarea id="prompt" rows="3">What product is in this photo? Reply with the brand, product name, rough price in USD, and whether it is food. Keep it short.</textarea>
+      </label>
+
+      <h2>Result</h2>
+      <pre id="result">No result yet.</pre>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

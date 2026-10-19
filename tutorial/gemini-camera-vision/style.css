@@ -1,0 +1,16 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #f4f4f5; color: #18181b; }
+main { max-width: 520px; margin: 0 auto; padding: 16px; }
+h1 { margin: 8px 0 4px; font-size: 1.5rem; }
+h2 { font-size: 1.1rem; margin: 16px 0 6px; }
+.sub { margin: 0 0 12px; color: #52525b; }
+label { display: block; font-size: 0.85rem; color: #3f3f46; flex: 1; }
+input, textarea { width: 100%; margin-top: 4px; padding: 10px; font: inherit; border: 1px solid #d4d4d8; border-radius: 8px; background: #fff; }
+.row { display: flex; gap: 10px; margin-bottom: 10px; }
+.camera { background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 3 / 4; display: flex; align-items: center; justify-content: center; }
+.camera video, .camera img { width: 100%; height: 100%; object-fit: cover; }
+.buttons { margin-top: 10px; }
+button { flex: 1; padding: 12px 8px; min-height: 44px; font: inherit; font-weight: 600; border: 0; border-radius: 10px; background: #2563eb; color: #fff; }
+button:disabled { background: #a1a1aa; }
+.prompt { margin-top: 6px; }
+pre { white-space: pre-wrap; background: #fff; border: 1px solid #e4e4e7; border-radius: 8px; padding: 12px; min-height: 60px; font-size: 0.95rem; }

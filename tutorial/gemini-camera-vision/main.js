@@ -71,20 +71,35 @@ askBtn.addEventListener("click", async () => {
   result.textContent = "Asking Gemini...";
   const started = performance.now();
 
-  try {
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: modelInput.value.trim(),
-      contents: [
-        { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
-        { text: promptInput.value },
-      ],
-    });
-    const secs = ((performance.now() - started) / 1000).toFixed(1);
-    result.textContent = response.text + `\n\n(answered in ${secs} s)`;
-  } catch (err) {
-    result.textContent = "Gemini request failed: " + err.message;
-  } finally {
-    askBtn.disabled = false;
+  const primaryModel = modelInput.value.trim() || "gemini-3.5-flash-lite";
+  const candidates = [primaryModel, "gemini-3.5-flash-lite", "gemini-3.7-flash"].filter(
+    (m, i, arr) => m && arr.indexOf(m) === i
+  );
+
+  let lastErr = null;
+  for (const modelName of candidates) {
+    try {
+      if (modelName !== primaryModel) {
+        result.textContent = `Retrying with ${modelName} due to server demand...`;
+      }
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [
+          { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
+          { text: promptInput.value },
+        ],
+      });
+      const secs = ((performance.now() - started) / 1000).toFixed(1);
+      const note = modelName !== primaryModel ? `\n\n(Note: Automatically switched to ${modelName} because ${primaryModel} was under high server demand)` : "";
+      result.textContent = response.text + `\n\n(answered in ${secs} s using ${modelName})${note}`;
+      return;
+    } catch (err) {
+      lastErr = err;
+      console.warn(`Model ${modelName} failed:`, err);
+    }
   }
+
+  result.textContent = "Gemini request failed: " + (lastErr ? lastErr.message : "Unknown error");
+  askBtn.disabled = false;
 });
